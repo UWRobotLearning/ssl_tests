@@ -1,7 +1,3 @@
-# import rospy, make it subscribe to "camera/color/image_raw" topic and run sam on the image
-# overlay the mask on the image and publish it to "camera/color/image_masked" topic
-
-import rospy
 import cv2
 import numpy as np
 from typing import Any
@@ -16,16 +12,30 @@ model = None
 
 
 @torch.no_grad()
-def test(data : str, sample_size : int, model_name : str):
+def benchmark(data : str, sample_size : int, model_name : str):
     global model
-    dts = []
+    dts = []    
     data = np.load("/root/catkin_ws/src/ssl_tests/data/" + data)
+
+    print("warming up..")
+    for num in range(3):
+        if model_name == "sam":
+            image = torch.from_numpy(data[num]).permute(2,0,1).to(device="cuda")
+            x = model.preprocess(image.unsqueeze(0))
+            out = model.image_encoder(x)
+    torch.cuda.synchronize()
+
+    print("start timing..")
     for num in range(int(sample_size)):
-        now = time.time()
-        image = torch.from_numpy(data[num]).permute(2,0,1).to(device="cuda")
-        x = model.preprocess(image.unsqueeze(0))
-        out = model.image_encoder(x)
-        dts.append(time.time() - now)
+        if model_name == "sam":
+            now = time.time()
+            image = torch.from_numpy(data[num]).permute(2,0,1).to(device="cuda")
+            x = model.preprocess(image.unsqueeze(0))
+            out = model.image_encoder(x)
+            torch.cuda.synchronize()
+            dts.append(time.time() - now)
+        elif model_name == "dino":
+            pass
 
         del x
         del out
@@ -34,15 +44,14 @@ def test(data : str, sample_size : int, model_name : str):
     max_dt = max(dts)
     min_dt = min(dts)
     avg_dt = sum(dts)/len(dts)
-    tru_avg_dt = avg_dt - max_dt/(len(dts))
-    var_dt = sum((dt - tru_avg_dt)**2 for dt in dts)/len(dts)
+    var_dt = sum((dt - avg_dt)**2 for dt in dts)/len(dts)
 
     new_data = {
         "Model": model_name,
         "Time (seconds)": {
             "minimum": min_dt,
             "maximum": max_dt,
-            "mean": tru_avg_dt,
+            "mean": avg_dt,
             "variance": var_dt,
         }
     }
@@ -91,7 +100,8 @@ if __name__ == "__main__":
         mask_generator = SamAutomaticMaskGenerator(model)
 
     elif args.model == "dino":
+
         pass
 
 
-    test(args.npy_file, args.sample_size, args.model)
+    benchmark(args.npy_file, args.sample_size, args.model)

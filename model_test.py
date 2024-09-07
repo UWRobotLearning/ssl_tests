@@ -9,22 +9,24 @@ import time
 import torch
 import argparse
 import yaml
+from collections import OrderedDict
 
 
-model = None
+model = None 
 
 
 @torch.no_grad()
-def test(model : Any, data : str, sample_size : int, model_name : str):
-    global sam
+def test(data : str, sample_size : int, model_name : str):
+    global model
     dts = []
     data = np.load("/root/catkin_ws/src/ssl_tests/data/" + data)
     for num in range(int(sample_size)):
         now = time.time()
         image = torch.from_numpy(data[num]).permute(2,0,1).to(device="cuda")
-        x = sam.preprocess(image.unsqueeze(0))
-        out = sam.image_encoder(x)
+        x = model.preprocess(image.unsqueeze(0))
+        out = model.image_encoder(x)
         dts.append(time.time() - now)
+
         del x
         del out
         del image
@@ -35,24 +37,33 @@ def test(model : Any, data : str, sample_size : int, model_name : str):
     tru_avg_dt = avg_dt - max_dt/(len(dts))
     var_dt = sum((dt - tru_avg_dt)**2 for dt in dts)/len(dts)
 
-    new_data  = {
-            "model" : model_name,
-                "inference time data" : {
-                    "minimum" : min_dt,
-                    "maximum" : max_dt,
-                    "mean"    : tru_avg_dt,
-                    "variance": var_dt,
-                }
-            }
-    with open("/root/catkin_ws/src/ssl_tests/data/stats.yaml", 'r') as  yaml_file:
-        try:
-            old_data = yaml.safe_load(yaml_file)
-            old_data.update(new_data)
-            yaml.dump(new_data, yaml_file, default_flow_style=False)
-        except yaml.YAMLError as exc:
-            print(f"Error loading YAML file: {exc}")
-            print(new_data)
+    new_data = {
+        "Model": model_name,
+        "Time (seconds)": {
+            "minimum": min_dt,
+            "maximum": max_dt,
+            "mean": tru_avg_dt,
+            "variance": var_dt,
+        }
+    }
+    #Try reading and updating it
+    try:
+        with open("/root/catkin_ws/src/ssl_tests/data/inference_stats.yaml", 'r') as yaml_file:
+            try:
+                old_data = yaml.safe_load(yaml_file) or {}
+                old_data.update(new_data)
+            except yaml.YAMLError as exc:
+                print(f"Error loading YAML file: {exc}")
+                old_data = new_data 
+    except FileNotFoundError:
+        old_data = new_data
 
+    #Try creating 
+    try:
+        with open("/root/catkin_ws/src/ssl_tests/data/inference_stats.yaml", 'w') as yaml_file:
+            yaml.dump(old_data, yaml_file, default_flow_style=False)
+    except yaml.YAMLError as exc:
+        print(f"Error writing YAML file: {exc}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -83,4 +94,4 @@ if __name__ == "__main__":
         pass
 
 
-    test(model, args.npy_file, args.sample_size, args.model)
+    test(args.npy_file, args.sample_size, args.model)

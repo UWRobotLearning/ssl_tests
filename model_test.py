@@ -5,7 +5,6 @@ import time
 import torch
 import argparse
 import yaml
-from collections import OrderedDict
 
 
 model = None 
@@ -14,8 +13,16 @@ model = None
 @torch.no_grad()
 def benchmark(data : str, sample_size : int, model_name : str):
     global model
-    dts = []    
+    dts = []
+        
     data = np.load("/root/catkin_ws/src/ssl_tests/data/" + data)
+    
+    #TODO: For data preprocessing 
+    if model_name == "sam":
+        pass
+    if model_name == "dino":
+        data = data[:, :224, :224, :]
+        pass
 
     print("warming up..")
     for num in range(3):
@@ -23,21 +30,35 @@ def benchmark(data : str, sample_size : int, model_name : str):
             image = torch.from_numpy(data[num]).permute(2,0,1).to(device="cuda")
             x = model.preprocess(image.unsqueeze(0))
             out = model.image_encoder(x)
+            del x
+            del out
+        elif model_name == "dino":
+            image = torch.from_numpy(data[num]).permute(2,0,1).to(device="cuda")
+            image = image.reshape(1, *(image.shape))
+            out = model(image)
+            del out
+
     torch.cuda.synchronize()
 
     print("start timing..")
     for num in range(int(sample_size)):
         if model_name == "sam":
-            now = time.time()
             image = torch.from_numpy(data[num]).permute(2,0,1).to(device="cuda")
+            now = time.time()
             x = model.preprocess(image.unsqueeze(0))
             out = model.image_encoder(x)
             torch.cuda.synchronize()
             dts.append(time.time() - now)
+            del x
         elif model_name == "dino":
-            pass
+            image = torch.from_numpy(data[num]).permute(2,0,1).to(device="cuda")
+            image = image.reshape(1, *(image.shape))
+            now = time.time()
+            out = model(image)
+            torch.cuda.synchronize()
+            dts.append(time.time() - now)
 
-        del x
+        
         del out
         del image
 
@@ -55,6 +76,7 @@ def benchmark(data : str, sample_size : int, model_name : str):
             "variance": var_dt,
         }
     }
+    print(new_data)
     #Try reading and updating it
     try:
         with open("/root/catkin_ws/src/ssl_tests/data/inference_stats.yaml", 'r') as yaml_file:
@@ -96,12 +118,15 @@ if __name__ == "__main__":
     if args.model == "sam":
         from segment_anything import SamAutomaticMaskGenerator, sam_model_registry
         model = sam_model_registry["vit_h"](checkpoint="models/sam_vit_h_4b8939.pth").to(device="cuda")
+        print(model)
         model.eval()
         mask_generator = SamAutomaticMaskGenerator(model)
 
     elif args.model == "dino":
-
-        pass
-
+        from transformers import Dinov2Config, Dinov2Model
+        configuration = Dinov2Config()
+        model = Dinov2Model(configuration).to(device="cuda")
+        model.load_state_dict(torch.load("models/dinov2_vits14_pretrain.pth"), strict = False)
+        model.eval()
 
     benchmark(args.npy_file, args.sample_size, args.model)
